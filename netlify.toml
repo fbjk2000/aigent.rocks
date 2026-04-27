@@ -1,0 +1,18 @@
+# Netlify config for aigent.rocks
+# Next.js 14 App Router + Prisma + Postgres
+
+[build]
+  command = "yarn install --immutable && yarn prisma generate && yarn build"
+  publish = ".next"
+
+[build.environment]
+  # Pin Node so behaviour matches local dev
+  NODE_VERSION = "20"
+  # Make sure Prisma uses the Lambda-compatible binary
+  PRISMA_QUERY_ENGINE_BINARY = "rhel-openssl-3.0.x"
+  # Skip yarn telemetry / interactive prompts during build
+  YARN_ENABLE_GLOBAL_CACHE = "false"
+
+# Netlify's official Next.js plugin handles SSR, image optim, edge functions, etc.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

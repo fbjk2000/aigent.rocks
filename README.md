@@ -75,20 +75,13 @@ yarn install
 
 ### Environment Variables
 
-Create a `.env` file in the project root:
+Copy `.env.example` to `.env` and fill in real values.
 
-```env
-# PostgreSQL connection string
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
-
-# earnrm CRM API key (for contact form integration)
-EARNRM_API_KEY=your_earnrm_api_key_here
-```
-
-| Variable        | Description                                  | Required |
-|-----------------|----------------------------------------------|----------|
-| `DATABASE_URL`  | PostgreSQL connection string                 | Yes      |
-| `EARNRM_API_KEY`| API key for earnrm CRM lead submission       | Yes      |
+| Variable           | Description                                                      | Required |
+|--------------------|------------------------------------------------------------------|----------|
+| `DATABASE_URL`     | PostgreSQL connection string (Supabase, Neon, etc.)              | Yes      |
+| `EARNRM_API_KEY`   | API key for earnrm CRM lead submission                           | Yes      |
+| `ANTHROPIC_API_KEY`| Anthropic API key — powers The Conductor chat widget             | Yes      |
 
 ### Database Setup
 
@@ -165,19 +158,27 @@ aigent.rocks/
 
 ## 🌍 Deployment
 
-This project is optimised for deployment on:
+This project deploys on **Netlify** via the official `@netlify/plugin-nextjs` plugin. Configuration lives in `netlify.toml`.
 
-- **Vercel** (recommended for Next.js)
-- **Docker** / any Node.js hosting platform
-- **AWS / GCP / Azure** with standalone output mode
+### Connecting to Netlify
 
-For standalone builds:
+1. Log into Netlify and click **Add new site → Import from Git**.
+2. Select this repository (`fbjk2000/aigent.rocks`) and the `main` branch.
+3. Build settings auto-detect from `netlify.toml` (no manual config needed).
+4. In **Site configuration → Environment variables**, add:
+   - `DATABASE_URL`
+   - `EARNRM_API_KEY`
+   - `ANTHROPIC_API_KEY`
+5. Trigger a deploy. The first build runs `yarn install --immutable && yarn prisma generate && yarn build`.
+6. Once green on the auto-assigned `*.netlify.app` URL, point your apex DNS at Netlify (CNAME for `www`, A record + Netlify's load balancer IPs for the apex, or switch to Netlify nameservers).
 
-```bash
-NEXT_OUTPUT_MODE=standalone yarn build
-```
+### LLM provider
 
-Ensure your deployment environment has the required environment variables (`DATABASE_URL`, `EARNRM_API_KEY`) configured.
+The Conductor chat widget calls Anthropic's Messages API (`claude-haiku-4-5-20251001`) directly — see `app/api/chat/route.ts`. Streaming is translated from Anthropic's SSE event format into OpenAI-compatible chunks so the chat UI parser stays unchanged.
+
+### Other deployment targets
+
+The app is portable to Vercel, Docker, or any Node.js host that supports Next.js 14 App Router. Netlify is the chosen target for this site.
 
 ---
 

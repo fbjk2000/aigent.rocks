@@ -42,52 +42,114 @@ Keep responses concise (2-4 short paragraphs max). Use emojis sparingly. If some
 
 Never make up pricing or timelines. For custom development enquiries, direct them to the contact form or alakai.digital for an AI assessment.`;
 
+// Anthropic Messages API streaming → OpenAI-format SSE adapter.
+// We translate Anthropic's event stream into the OpenAI shape the chat widget
+// already parses, so the client doesn't need to change.
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { messages } = await request.json();
+    const { messages } = (await request.json()) as { messages: ChatMessage[] };
 
-    const apiKey = process.env.ABACUSAI_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      return new Response(JSON.stringify({ error: "API key not configured" }), { status: 500 });
+      return new Response(
+        JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }),
+        { status: 500 }
+      );
     }
 
-    const response = await fetch("https://apps.abacus.ai/v1/chat/completions", {
+    // Anthropic expects only user/assistant in the messages array;
+    // the system prompt goes in its own top-level field.
+    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          ...messages,
-        ],
-        stream: true,
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
+        stream: true,
+        system: SYSTEM_PROMPT,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("LLM API error:", errorText);
-      return new Response(JSON.stringify({ error: "Failed to get AI response" }), { status: 500 });
+    if (!upstream.ok) {
+      const errorText = await upstream.text();
+      console.error("Anthropic API error:", upstream.status, errorText);
+      return new Response(
+        JSON.stringify({ error: "Failed to get AI response" }),
+        { status: 500 }
+      );
     }
+
+    // Translate Anthropic SSE → OpenAI-format SSE on the fly.
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
 
     const stream = new ReadableStream({
       async start(controller) {
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        const encoder = new TextEncoder();
+        const reader = upstream.body?.getReader();
+        if (!reader) {
+          controller.close();
+          return;
+        }
+
+        let buffer = "";
         try {
           while (true) {
-            const { done, value } = await reader!.read();
+            const { done, value } = await reader.read();
             if (done) break;
-            const chunk = decoder.decode(value);
-            controller.enqueue(encoder.encode(chunk));
+            buffer += decoder.decode(value, { stream: true });
+
+            // Anthropic events are separated by blank lines; each event is
+            // one or more `field: value` lines. We only care about the
+            // `data:` line of `content_block_delta` events containing
+            // text deltas.
+            const events = buffer.split("\n\n");
+            buffer = events.pop() ?? "";
+
+            for (const ev of events) {
+              const lines = ev.split("\n");
+              let dataLine = "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  dataLine = line.slice(6);
+                  break;
+                }
+              }
+              if (!dataLine) continue;
+              try {
+                const evt = JSON.parse(dataLine);
+                if (
+                  evt.type === "content_block_delta" &&
+                  evt.delta?.type === "text_delta" &&
+                  typeof evt.delta.text === "string" &&
+                  evt.delta.text.length > 0
+                ) {
+                  // Re-emit as OpenAI-compatible chunk
+                  const chunk = {
+                    choices: [{ delta: { content: evt.delta.text } }],
+                  };
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                  );
+                }
+              } catch {
+                // ignore malformed/control events (ping, message_start, etc.)
+              }
+            }
           }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         } catch (error) {
-          console.error("Stream error:", error);
+          console.error("Stream relay error:", error);
           controller.error(error);
         } finally {
           controller.close();
@@ -97,13 +159,16 @@ export async function POST(request: NextRequest) {
 
     return new Response(stream, {
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
       },
     });
   } catch (error) {
     console.error("Chat API error:", error);
-    return new Response(JSON.stringify({ error: "Internal server error" }), { status: 500 });
+    return new Response(
+      JSON.stringify({ error: "Internal server error" }),
+      { status: 500 }
+    );
   }
 }
